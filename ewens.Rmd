@@ -1,0 +1,199 @@
+---
+title: "Using Ewens sampling distribution to estimate &theta;"
+output: html_notebook
+---
+
+## Load libraries and clear out memory
+
+```{r}
+library(phyclust)
+library(rstan)
+library(tidyverse)
+library(ggplot2)
+
+rm(list = ls())
+
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
+```
+
+## Set simulation parameters
+
+```{r}
+n_rep <- 25
+n_sample <- 250
+theta <- 0.1
+```
+
+## Select prior
+
+```{r}
+## prior on theta
+##   mean = shape/rate
+##   variance = shape/(rate^2)
+##
+p <- ggplot() + 
+  xlim(0, 5) + 
+  geom_function(fun = dgamma, args = list(shape = 1, rate = 1), color = "salmon") +
+  geom_function(fun = dgamma, args = list(shape = 0.5, rate = 0.5), color = "royalblue") +
+  geom_function(fun = dgamma, args = list(shape = 2, rate = 2), color = "orange") +
+  geom_function(fun = dgamma, args = list(shape = 4, rate = 4), color = "blueviolet") +
+  geom_text(aes(x = 4, y = 1.4), label = "shape = 1, rate = 1", color = "salmon") +
+  geom_text(aes(x = 4, y = 1.5), label = "shape = 0.5, rate = 0.5", color = "royalblue") +
+  geom_text(aes(x = 4, y = 1.3), label = "shape = 2, rate = 2", color = "orange") +
+  geom_text(aes(x = 4, y = 1.2), label = "shape = 4, rate = 4", color = "blueviolet") +
+  xlab(bquote(theta)) +
+  ylab("") +
+  theme_bw()
+p
+
+## The ones I picked
+##
+shape = 4
+rate = 4
+```
+
+## Define utility functions
+
+```{r}
+harm_sum <- function(n) {
+  k <- 0
+  for (i in 1:(n-1)) {
+    k <- k + 1/i
+  }
+  return(k)
+}
+
+est_theta <- function(seg_sites, n_sample) {
+  return(seg_sites/harm_sum(n_sample))
+}
+
+## get mean and 95% credible intervals from Stan fit
+##
+get_fit_stats <- function(fit) {
+  fit_dat <- as.data.frame(fit)
+  mu <- mean(fit_dat$theta, na.rm = TRUE)
+  lo <- quantile(fit_dat$theta, 0.025)
+  hi <- quantile(fit_dat$theta, 0.975)
+  return(list(mu = mu, lo = lo, hi = hi))
+}
+```
+
+## Run the simulation
+
+```{r}
+theta_watterson <- numeric(n_rep)
+theta_bayes <- numeric(n_rep)
+theta_lo <- numeric(n_rep)
+theta_hi <- numeric(n_rep)
+for (rep in 1:n_rep) {
+  cat(".")
+  if (rep %% 5 == 0) {
+    count <- sprintf("%4d", rep)
+    cat(count)
+  }
+  if (rep %% 50 == 0) {
+    cat("\n")
+  }
+  ## simulate the data
+  ##
+  ms_tree <- phyclust::ms(nsam = n_sample, nreps = 1, opts = paste("-t", theta))
+  ## estimate theta using Watterson approach
+  ##
+  seg_sites <- as.numeric(gsub(".* ([0-9]+)", "\\1", ms_tree[3]))
+  theta_watterson[rep] <- est_theta(seg_sites, n_sample)
+  ## estimate theta using Bayesian approach
+  ##
+  a <- numeric(n_sample)
+  if (seg_sites > 0) {
+    counts <- table(ms_tree[5:(n_sample+4)])
+    for (count in 1:length(counts)) {
+      index <- counts[count]
+      a[index] <- a[index] + 1
+    }
+  } else {
+    a[n_sample] <- 1
+  }
+  stan_data <- list(N = length(a),
+                    a = a,
+                    shape = shape,
+                    rate = rate)
+  withCallingHandlers(
+    fit <- stan(file = "ewens.stan",
+                data = stan_data,
+                refresh = 0),
+    warning = function(cnd) {
+      print(a)
+    }
+  )
+  fit_stats <- get_fit_stats(fit)
+  theta_bayes[rep] <- fit_stats$mu
+  theta_lo[rep] <- fit_stats$lo
+  theta_hi[rep] <- fit_stats$hi
+}
+dat <- tibble(theta_watterson = theta_watterson,
+              theta_bayes = theta_bayes,
+              theta_lo = theta_lo,
+              theta_hi = theta_hi)
+dat_sum <- dat %>%
+  select(theta_watterson, theta_bayes) %>%
+  summarize(theta_w = mean(theta_watterson),
+            theta_w_sd = sd(theta_watterson),
+            theta_b = mean(theta_bayes),
+            theta_b_sd = sd(theta_bayes))
+cover <- 0
+for (i in 1:nrow(dat)) {
+  if ((dat$theta_lo[i] < theta) && (dat$theta_hi[i] > theta)) {
+    cover <- cover + 1
+  }
+}
+theta_w_bias <- mean(dat$theta_watterson - theta)
+theta_w_rmse <- sqrt(sum(dat$theta_watterson - theta)^2)
+theta_b_bias <- mean(dat$theta_bayes - theta)
+theta_b_rmse <- sqrt(sum(dat$theta_bayes - theta)^2)
+dat_sum$theta_w_bias <- theta_w_bias
+dat_sum$theta_w_rmse <- theta_w_rmse
+dat_sum$theta_b_bias <- theta_b_bias
+dat_sum$theta_b_rmse <- theta_b_rmse
+dat_sum$theta_b_cover <- cover/n_rep
+dat_sum
+
+theta_df <- tibble(theta_watterson = theta, theta_bayes = theta)
+p <- ggplot(dat, aes(x = theta_watterson, y = theta_bayes)) +
+  geom_point() +
+  geom_point(data = theta_df, size = 4, color = "royalblue") +
+  geom_abline(slope = 1, intercept = 0, color = "salmon", linetype = "dashed") +
+  xlim(0, NA) +
+  ylim(0, NA) +
+  ggtitle("Watterson vs. Bayesian estimates") +
+  theme_bw()
+p
+
+p <-ggplot(dat, aes(x = theta_watterson)) +
+  geom_histogram(binwidth = 0.1) +
+  geom_vline(xintercept = theta, color = "salmon", linetype = "dashed") +
+  ggtitle("Distribution of Watterson estimates") +
+  theme_bw()
+p
+
+p <-ggplot(dat, aes(x = theta_bayes)) +
+  geom_histogram(binwidth = 0.1) +
+  geom_vline(xintercept = theta, color = "salmon", linetype = "dashed") +
+  ggtitle("Distribution of Bayesian estimates") +
+  theme_bw()
+p
+```
+
+## Plot posterior vs. prior for last sample
+
+```{r}
+fit_dat <- as.data.frame(fit)
+p <- ggplot(fit_dat, aes(x = theta)) +
+  geom_density() +
+  geom_function(fun = dgamma, args = list(shape = shape, rate = rate), color = "salmon",
+                linetype = "dashed") +
+  xlab(bquote(theta)) +
+  ylab("") +
+  theme_bw()
+p
+```
