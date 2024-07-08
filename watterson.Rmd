@@ -1,0 +1,51 @@
+---
+title: "Watterson's estimate of &theta;"
+output: html_notebook
+---
+
+To compare the statistics with the simulations in [ewens.nb.html](ewens.nb.html) we'll set $\theta = 0.1$ and calculate backwards from that.
+
+```{r}
+rm(list = ls())
+
+sample_size <- 250
+
+## calculate a harmonic sum: \sum_i 1/i
+##
+harm_sum <- function(n) {
+  k <- 0
+  for (i in 1:(n-1)) {
+    k <- k + 1/i
+  }
+  return(k)
+}
+
+## calculate a harmonic squared sum: \sum_i 1/(i^2)
+##
+harm_sum_squared <- function(n) {
+  k <- 0
+  for (i in 1:(n-1)) {
+    k <- k + 1/i
+  }
+  return(k)
+}
+
+theta <- numeric(0)
+theta_var <- numeric(0)
+theta_sd <- numeric(0)
+for (theta_rep in c(0.1, 0.25, 0.5, 1)) {
+  S <- theta_rep*harm_sum(sample_size)
+  theta_est <- S/harm_sum(sample_size) 
+  theta <- c(theta, theta_est)
+  tmp <- theta_est/harm_sum(sample_size) +     
+           harm_sum_squared(sample_size)*(theta_est^2)/(harm_sum(sample_size)^2)
+  theta_var <- c(theta_var, tmp)
+  theta_sd <- c(theta_sd, sqrt(tmp))
+}
+result <- data.frame(theta = theta,
+                     theta_var = round(theta_var, 3),
+                     theta_sd = round(theta_sd, 3))
+result
+```
+
+

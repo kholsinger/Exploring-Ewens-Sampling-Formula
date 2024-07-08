@@ -48,9 +48,15 @@ get_fit_stats <- function(fit) {
 
 ## Run the simulation
 ##
-simulate <- function(n_sample, shape, rate, theta, n_rep = 1) {
+simulate <- function(n_sample, shape, rate, theta, n_rep = 1, model = "ewens") {
   theta_watterson <- numeric(n_rep)
-  theta_bayes <- tibble(rep = 0, theta = 0, lp__ = 0)[0, ]
+  if (n_rep == 1) {
+    theta_bayes <- tibble(rep = 0, theta = 0, lp__ = 0)[0, ]
+  } else {
+    theta_bayes <- numeric(0)
+    theta_lo <- numeric(0)
+    theta_hi <- numeric(0)
+  }
   for (rep in 1:n_rep) {
     if (n_rep > 1) {
       cat(".")
@@ -81,16 +87,35 @@ simulate <- function(n_sample, shape, rate, theta, n_rep = 1) {
     } else {
       a[n_sample] <- 1
     }
-    stan_data <- list(N = length(a),
-                      a = a,
-                      shape = shape,
-                      rate = rate)
-    fit <- stan(file = "ewens.stan",
+    if (model == "ewens") {
+      stan_data <- list(N = n_sample,
+                        a = a,
+                        shape = shape,
+                        rate = rate) 
+    } else {
+      stan_data <- list(N = n_sample,
+                        s = seg_sites,
+                        shape = shape,
+                        rate = rate)
+    }
+    fit <- stan(file = model,
                 data = stan_data,
                 refresh = 0)
-    theta_bayes <- add_row(theta_bayes, cbind(rep = rep, as.data.frame(fit)))
+    if (n_rep == 1) {
+      theta_bayes <- add_row(theta_bayes, cbind(rep = rep, as.data.frame(fit)))
+    } else {
+      tmp <- get_fit_stats(fit)
+      theta_bayes <- c(theta_bayes, tmp$mu)
+      theta_lo <- c(theta_lo, tmp$lo)
+      theta_hi <- c(theta_hi, tmp$hi)
+    }
   }
-  return(list(theta_watterson = theta_watterson, theta_bayes = theta_bayes))
+  if (n_rep == 1) {
+    return(list(theta_watterson = theta_watterson, theta_bayes = theta_bayes))
+  } else {
+    return(list(theta_watterson = theta_watterson, theta_bayes = theta_bayes,
+                theta_lo = theta_lo, theta_hi = theta_hi))
+  }
 }
 ```
 
@@ -170,7 +195,7 @@ p <- ggplot(fit_dat, aes(x = theta)) +
   geom_line(data = dens_dat, aes(x = theta, y = density), color = "salmon", linetype = "dashed") +
   xlab(bquote(theta)) +
   ylab("") +
-  facet_wrap(~ parameter_set) +
+  facet_wrap(~ parameter_set, scales = "free_y") +
   ggtitle(title) +
   theme_bw()
 p
@@ -224,7 +249,7 @@ p <- ggplot(fit_dat, aes(x = theta)) +
   geom_line(data = dens_dat, aes(x = theta, y = density), color = "salmon", linetype = "dashed") +
   xlab(bquote(theta)) +
   ylab("") +
-  facet_wrap(~ parameter_set) +
+  facet_wrap(~ parameter_set, scales = "free_y") +
   ggtitle(title) +
   theme_bw()
 p
@@ -232,28 +257,19 @@ p
 
 ## Set simulation parameters
 
-$\Gamma(1, 1)$ seems like the best choice of prior (based on this very cursory study). The posterior is more clearly different from the prior in larger (250) samples. The weight of the density at 0 is also much less than with $\Gamma(0.5, 0.5)$. Let's see how the Watterson and Bayesian estimates compare using samples of 250 alleles across 100 replicates with $\theta = 0.1$ using a $\Gamma(1,1)$ prior on $\theta$.
+$\Gamma(1, 1)$ seems like the best choice of prior (based on this very cursory study). The posterior is more clearly different from the prior than with $\Gamma(2,2)$ or $\Gamma(4,4)$ with a sample size of 25. The weight of the density at 0 is also much less than with $\Gamma(0.5, 0.5)$. Let's see how the Watterson and Bayesian estimates compare using samples of 250 alleles across 100 replicates with $\theta = 0.1$ using a $\Gamma(1,1)$ prior on $\theta$.
 
 ```{r}
 n_repetitions <- 100
 theta <- 0.1
+shape <- 1
+rate <- 1
 
-result <- simulate(n_sample = 250, shape = 1, rate = 1, theta = theta, n_rep = n_repetitions)
-theta_watterson <- result$theta_watterson
-theta_bayes <- numeric(0)
-theta_lo <- numeric(0)
-theta_hi <- numeric(0)
-for (i in 1:n_repetitions) {
-  rep_results <- subset(result$theta_bayes, rep == i)
-  tmp <- get_fit_stats(rep_results)
-  theta_bayes <- c(theta_bayes, tmp$mu)
-  theta_lo <- c(theta_lo, tmp$lo)
-  theta_hi <- c(theta_hi, tmp$hi)
-}
-dat <- tibble(theta_watterson = theta_watterson,
-              theta_bayes = theta_bayes,
-              theta_lo = theta_lo,
-              theta_hi = theta_hi)
+result <- simulate(n_sample = 250, shape = shape, rate = shape, theta = theta, n_rep = n_repetitions)
+dat <- tibble(theta_watterson = result$theta_watterson,
+              theta_bayes = result$theta_bayes,
+              theta_lo = result$theta_lo,
+              theta_hi = result$theta_hi)
 dat_sum <- dat %>%
   select(theta_watterson, theta_bayes) %>%
   summarize(theta_w = mean(theta_watterson),
@@ -300,3 +316,126 @@ p <-ggplot(dat, aes(x = theta)) +
 p
 ```
 
+Let's try that again with $\theta = 0.9$.
+
+
+```{r}
+n_repetitions <- 100
+theta <- 0.9
+shape <- 1
+rate <- 1
+
+result <- simulate(n_sample = 250, shape = shape, rate = shape, theta = theta, n_rep = n_repetitions)
+dat <- tibble(theta_watterson = result$theta_watterson,
+              theta_bayes = result$theta_bayes,
+              theta_lo = result$theta_lo,
+              theta_hi = result$theta_hi)
+dat_sum <- dat %>%
+  select(theta_watterson, theta_bayes) %>%
+  summarize(theta_w = mean(theta_watterson),
+            theta_w_sd = sd(theta_watterson),
+            theta_b = mean(theta_bayes),
+            theta_b_sd = sd(theta_bayes))
+cover <- 0
+for (i in 1:nrow(dat)) {
+  if ((dat$theta_lo[i] < theta) && (dat$theta_hi[i] > theta)) {
+    cover <- cover + 1
+  }
+}
+theta_w_bias <- mean(dat$theta_watterson - theta)
+theta_w_rmse <- sqrt(sum(dat$theta_watterson - theta)^2)
+theta_b_bias <- mean(dat$theta_bayes - theta)
+theta_b_rmse <- sqrt(sum(dat$theta_bayes - theta)^2)
+dat_sum$theta_w_bias <- theta_w_bias
+dat_sum$theta_w_rmse <- theta_w_rmse
+dat_sum$theta_b_bias <- theta_b_bias
+dat_sum$theta_b_rmse <- theta_b_rmse
+dat_sum$theta_b_cover <- cover/n_repetitions
+dat_sum
+
+theta_df <- tibble(theta_watterson = theta, theta_bayes = theta)
+p <- ggplot(dat, aes(x = theta_watterson, y = theta_bayes)) +
+  geom_point() +
+  geom_point(data = theta_df, size = 4, color = "royalblue") +
+  geom_abline(slope = 1, intercept = 0, color = "salmon", linetype = "dashed") +
+  xlim(0, NA) +
+  ylim(0, NA) +
+  ggtitle("Watterson vs. Bayesian estimates") +
+  theme_bw()
+p
+
+dat <- dat %>% 
+  select(theta_watterson, theta_bayes) %>% 
+  pivot_longer(cols = everything(), names_to = "Model", values_to = "theta") %>%
+  mutate(Model = substring(Model, 7))
+p <-ggplot(dat, aes(x = theta)) +
+  geom_histogram(binwidth = 0.05) +
+  geom_vline(xintercept = theta, color = "salmon", linetype = "dashed") +
+  facet_wrap(~ Model) +
+  theme_bw()
+p
+```
+
+In this case the prior mean is not too different from the value used in the simulation, and the bias isn't nearly as bad.
+
+## Trying Tavaré's distribution for a Bayesian estimate
+
+eq. (9.57) in Ewens, *Mathematical Population Genetics*, vol. 1.
+
+```{r}
+n_repetitions <- 100
+theta <- 0.1
+shape <- 1
+rate <- 1
+
+result <- simulate(n_sample = 250, shape = shape, rate = shape, theta = theta, 
+                   n_rep = n_repetitions, model = "tavare.stan")
+dat <- tibble(theta_watterson = result$theta_watterson,
+              theta_bayes = result$theta_bayes,
+              theta_lo = result$theta_lo,
+              theta_hi = result$theta_hi)
+dat_sum <- dat %>%
+  select(theta_watterson, theta_bayes) %>%
+  summarize(theta_w = mean(theta_watterson),
+            theta_w_sd = sd(theta_watterson),
+            theta_b = mean(theta_bayes),
+            theta_b_sd = sd(theta_bayes))
+cover <- 0
+for (i in 1:nrow(dat)) {
+  if ((dat$theta_lo[i] < theta) && (dat$theta_hi[i] > theta)) {
+    cover <- cover + 1
+  }
+}
+theta_w_bias <- mean(dat$theta_watterson - theta)
+theta_w_rmse <- sqrt(sum(dat$theta_watterson - theta)^2)
+theta_b_bias <- mean(dat$theta_bayes - theta)
+theta_b_rmse <- sqrt(sum(dat$theta_bayes - theta)^2)
+dat_sum$theta_w_bias <- theta_w_bias
+dat_sum$theta_w_rmse <- theta_w_rmse
+dat_sum$theta_b_bias <- theta_b_bias
+dat_sum$theta_b_rmse <- theta_b_rmse
+dat_sum$theta_b_cover <- cover/n_repetitions
+dat_sum
+
+theta_df <- tibble(theta_watterson = theta, theta_bayes = theta)
+p <- ggplot(dat, aes(x = theta_watterson, y = theta_bayes)) +
+  geom_point() +
+  geom_point(data = theta_df, size = 4, color = "royalblue") +
+  geom_abline(slope = 1, intercept = 0, color = "salmon", linetype = "dashed") +
+  xlim(0, NA) +
+  ylim(0, NA) +
+  ggtitle("Watterson vs. Bayesian estimates") +
+  theme_bw()
+p
+
+dat <- dat %>% 
+  select(theta_watterson, theta_bayes) %>% 
+  pivot_longer(cols = everything(), names_to = "Model", values_to = "theta") %>%
+  mutate(Model = substring(Model, 7))
+p <-ggplot(dat, aes(x = theta)) +
+  geom_histogram(binwidth = 0.05) +
+  geom_vline(xintercept = theta, color = "salmon", linetype = "dashed") +
+  facet_wrap(~ Model) +
+  theme_bw()
+p
+```
