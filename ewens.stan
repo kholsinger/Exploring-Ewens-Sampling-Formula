@@ -28,6 +28,7 @@ data {
   int a[N];
   real shape;
   real rate;
+  int<lower = 0, upper = 1> prior;
 }
 
 parameters {
@@ -35,14 +36,21 @@ parameters {
 }
 
 model {
-  ## prior on theta
+  ## gamma prior on theta
   ##   mean = shape/rate
   ##   variance = shape/(rate^2)
   ##
-  theta ~ gamma(shape, rate);
-  
+  if (prior == 0) {
+    theta ~ gamma(shape, rate); 
+  } else {
+    ## shape = mean of log(theta)
+    ## rate = sd of log(theta)
+    ##
+    theta ~ lognormal(shape, rate);
+  }
+
   ## likelihood of data
   ##
-  target += ewens_lpmf(a | theta);
+ target += ewens_lpmf(a | theta);
 }
 

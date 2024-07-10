@@ -1,0 +1,286 @@
+---
+title: "Using Ewens sampling distribution to estimate &theta;"
+output: html_notebook
+---
+
+## Load libraries and clear out memory
+
+```{r}
+library(phyclust)
+library(rstan)
+library(tidyverse)
+library(ggplot2)
+
+rm(list = ls())
+
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
+```
+
+## Define utility functions
+
+```{r}
+## calculate a harmonic sum: \sum_i 1/i
+##
+harm_sum <- function(n) {
+  k <- 0
+  for (i in 1:(n-1)) {
+    k <- k + 1/i
+  }
+  return(k)
+}
+
+## Watterson's estimate of theta
+##
+est_theta <- function(seg_sites, n_sample) {
+  return(seg_sites/harm_sum(n_sample))
+}
+
+## get mean and 95% credible intervals from Stan fit
+##
+get_fit_stats <- function(fit) {
+  fit_dat <- as.data.frame(fit)
+  mu <- mean(fit_dat$theta, na.rm = TRUE)
+  lo <- quantile(fit_dat$theta, 0.025)
+  hi <- quantile(fit_dat$theta, 0.975)
+  return(list(mu = mu, lo = lo, hi = hi))
+}
+
+## Run the simulation
+##
+simulate <- function(n_sample, shape, rate, theta, n_rep = 1, prior = "gamma") 
+{
+  theta_watterson <- numeric(n_rep)
+  if (n_rep == 1) {
+    theta_bayes <- tibble(rep = 0, theta = 0, lp__ = 0)[0, ]
+  } else {
+    theta_bayes <- numeric(0)
+    theta_lo <- numeric(0)
+    theta_hi <- numeric(0)
+  }
+  for (rep in 1:n_rep) {
+    if (n_rep > 1) {
+      cat(".")
+      if (rep %% 5 == 0) {
+        count <- sprintf("%4d", rep)
+        cat(count)
+      }
+      if (rep %% 50 == 0) {
+        cat("\n")
+      }
+    }
+    ## simulate the data
+    ##
+    ms_tree <- phyclust::ms(nsam = n_sample, nreps = 1, opts = paste("-t", theta))
+    ## estimate theta using Watterson approach
+    ##
+    seg_sites <- as.numeric(gsub(".* ([0-9]+)", "\\1", ms_tree[3]))
+    theta_watterson[rep] <- est_theta(seg_sites, n_sample)
+    ## estimate theta using Bayesian approach
+    ##
+    a <- numeric(n_sample)
+    if (seg_sites > 0) {
+      counts <- table(ms_tree[5:(n_sample+4)])
+      for (count in 1:length(counts)) {
+        index <- counts[count]
+        a[index] <- a[index] + 1
+      }
+    } else {
+      a[n_sample] <- 1
+    }
+    stan_data <- list(N = n_sample,
+                      a = a,
+                      shape = shape,
+                      rate = rate,
+                      prior = (prior == "gamma")) 
+    fit <- stan(file = "ewens.stan",
+                data = stan_data,
+                refresh = 0)
+    if (n_rep == 1) {
+      theta_bayes <- add_row(theta_bayes, cbind(rep = rep, as.data.frame(fit)))
+    } else {
+      tmp <- get_fit_stats(fit)
+      theta_bayes <- c(theta_bayes, tmp$mu)
+      theta_lo <- c(theta_lo, tmp$lo)
+      theta_hi <- c(theta_hi, tmp$hi)
+    }
+  }
+  if (n_rep == 1) {
+    return(list(theta_watterson = theta_watterson, theta_bayes = theta_bayes))
+  } else {
+    return(list(theta_watterson = theta_watterson, theta_bayes = theta_bayes,
+                theta_lo = theta_lo, theta_hi = theta_hi))
+  }
+}
+```
+
+## Compare prior and posterior, $\theta = 0.1$, `n_sample = 25`: Gamma prior
+
+```{r}
+parameters <- matrix(c(1, 1,
+                       0.5, 0.5,
+                       2, 2,
+                       4, 4), byrow = TRUE, ncol = 2)
+theta <- numeric(0)
+shape <- numeric(0)
+rate <- numeric(0)
+parameter_set <- character(0)
+for (i in 1:nrow(parameters)) {
+  result <- simulate(n_sample = 25, shape = parameters[i, 1], rate = parameters[i, 2], 
+                     theta = 0.1, n_rep = 1, prior = "gamma")
+  result_dat <- result$theta_bayes
+  n_in_sample <- nrow(result_dat)
+  theta <- c(theta, result_dat$theta)
+  shape <- c(shape, rep(parameters[i, 1], n_in_sample))
+  rate <- c(rate, rep(parameters[i, 1], n_in_sample))
+  tmp <- sprintf("shape = %3.1f, rate = %3.1f", parameters[i, 1], parameters[i, 2])
+  parameter_set <- c(parameter_set, rep(tmp, n_in_sample))
+}
+fit_dat <- tibble(theta = theta,
+                  shape = shape,
+                  rate = rate,
+                  parameter_set = parameter_set)
+
+theta <- numeric(0)
+density <- numeric(0)
+parameter_set <- character(0)
+x <- seq(0, 2, 0.01)
+for (i in 1:nrow(parameters)) {
+  y <- dgamma(x, shape = parameters[i, 1], rate = parameters[i, 2])
+  theta <- c(theta, x)
+  density <- c(density, y)
+  tmp <- sprintf("shape = %3.1f, rate = %3.1f", parameters[i, 1], parameters[i, 2])
+  parameter_set <- c(parameter_set, rep(tmp, length(x)))
+}
+dens_dat <- tibble(theta = theta,
+                   density = density,
+                   parameter_set = parameter_set)
+
+## Plot posterior vs. prior
+##
+title <- paste("Sample size: 25, Prior density shown as dashed red line. ",
+               bquote(theta), 
+               "= 0.1.")
+p <- ggplot(fit_dat, aes(x = theta)) +
+  geom_density() +
+  geom_line(data = dens_dat, aes(x = theta, y = density), color = "salmon", linetype = "dashed") +
+  xlab(bquote(theta)) +
+  ylab("") +
+  facet_wrap(~ parameter_set, scales = "free_y") +
+  ggtitle(title) +
+  theme_bw()
+p
+```
+
+## Compare prior and posterior, $\theta = 0.1$, `n_sample = 25`: lognormal prior
+
+```{r}
+parameters <- matrix(c(1, 1,
+                       1, 0.5,
+                       1, 0.25,
+                       1, 0.1), byrow = TRUE, ncol = 2)
+theta <- numeric(0)
+shape <- numeric(0)
+rate <- numeric(0)
+parameter_set <- character(0)
+for (i in 1:nrow(parameters)) {
+  result <- simulate(n_sample = 25, shape = parameters[i, 1], rate = parameters[i, 2], 
+                     theta = 0.1, n_rep = 1, prior = "lognormal")
+  result_dat <- result$theta_bayes
+  n_in_sample <- nrow(result_dat)
+  theta <- c(theta, result_dat$theta)
+  shape <- c(shape, rep(parameters[i, 1], n_in_sample))
+  rate <- c(rate, rep(parameters[i, 1], n_in_sample))
+  tmp <- sprintf("mean_log = %3.1f, sd_log = %3.1f", parameters[i, 1], parameters[i, 2])
+  parameter_set <- c(parameter_set, rep(tmp, n_in_sample))
+}
+fit_dat <- tibble(theta = theta,
+                  shape = shape,
+                  rate = rate,
+                  parameter_set = parameter_set)
+
+theta <- numeric(0)
+density <- numeric(0)
+parameter_set <- character(0)
+x <- seq(0, 5, 0.01)
+for (i in 1:nrow(parameters)) {
+  y <- dlnorm(x, meanlog = parameters[i, 1], sdlog = parameters[i, 2])
+  theta <- c(theta, x)
+  density <- c(density, y)
+  tmp <- sprintf("mean_log = %3.1f, sd_log = %3.1f", parameters[i, 1], parameters[i, 2])
+  parameter_set <- c(parameter_set, rep(tmp, length(x)))
+}
+dens_dat <- tibble(theta = theta,
+                   density = density,
+                   parameter_set = parameter_set)
+
+## Plot posterior vs. prior
+##
+title <- paste("Sample size: 25, Prior density shown as dashed red line. ",
+               bquote(theta), 
+               "= 0.1.")
+p <- ggplot(fit_dat, aes(x = theta)) +
+  geom_density() +
+  geom_line(data = dens_dat, aes(x = theta, y = density), color = "salmon", linetype = "dashed") +
+  xlab(bquote(theta)) +
+  ylab("") +
+  facet_wrap(~ parameter_set, scales = "free_y") +
+  ggtitle(title) +
+  theme_bw()
+p
+```
+
+
+## Compare prior and posterior for $\theta = 0.1$, `n_sample = 250`, Gamma prior
+
+```{r}
+theta <- numeric(0)
+shape <- numeric(0)
+rate <- numeric(0)
+parameter_set <- character(0)
+for (i in 1:nrow(parameters)) {
+  result <- simulate(n_sample = 250, shape = parameters[i, 1], rate = parameters[i, 2], 
+                     theta = 0.1, n_rep = 1)
+  result_dat <- result$theta_bayes
+  n_in_sample <- nrow(result_dat)
+  theta <- c(theta, result_dat$theta)
+  shape <- c(shape, rep(parameters[i, 1], n_in_sample))
+  rate <- c(rate, rep(parameters[i, 1], n_in_sample))
+  tmp <- sprintf("shape = %3.1f, rate = %3.1f", parameters[i, 1], parameters[i, 2])
+  parameter_set <- c(parameter_set, rep(tmp, n_in_sample))
+}
+fit_dat <- tibble(theta = theta,
+                  shape = shape,
+                  rate = rate,
+                  parameter_set = parameter_set)
+
+theta <- numeric(0)
+density <- numeric(0)
+parameter_set <- character(0)
+x <- seq(0, 2, 0.01)
+for (i in 1:nrow(parameters)) {
+  y <- dgamma(x, shape = parameters[i, 1], rate = parameters[i, 2])
+  theta <- c(theta, x)
+  density <- c(density, y)
+  tmp <- sprintf("shape = %3.1f, rate = %3.1f", parameters[i, 1], parameters[i, 2])
+  parameter_set <- c(parameter_set, rep(tmp, length(x)))
+}
+dens_dat <- tibble(theta = theta,
+                   density = density,
+                   parameter_set = parameter_set)
+
+## Plot posterior vs. prior
+##
+title <- paste("Sample size: 250, Prior density shown as dashed red line. ",
+               bquote(theta), 
+               "= 0.1.")
+p <- ggplot(fit_dat, aes(x = theta)) +
+  geom_density() +
+  geom_line(data = dens_dat, aes(x = theta, y = density), color = "salmon", linetype = "dashed") +
+  xlab(bquote(theta)) +
+  ylab("") +
+  facet_wrap(~ parameter_set, scales = "free_y") +
+  ggtitle(title) +
+  theme_bw()
+p
+```
