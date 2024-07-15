@@ -234,6 +234,10 @@ p
 ## Compare prior and posterior for $\theta = 0.1$, `n_sample = 250`, Gamma prior
 
 ```{r}
+parameters <- matrix(c(1, 1,
+                       0.5, 0.5,
+                       2, 2,
+                       4, 4), byrow = TRUE, ncol = 2)
 theta <- numeric(0)
 shape <- numeric(0)
 rate <- numeric(0)
@@ -281,6 +285,186 @@ p <- ggplot(fit_dat, aes(x = theta)) +
   ylab("") +
   facet_wrap(~ parameter_set, scales = "free_y") +
   ggtitle(title) +
+  theme_bw()
+p
+```
+
+## Compare prior and posterior for $\theta = 0.1$, `n_sample = 250`, lognormal prior
+
+```{r}
+parameters <- matrix(c(1, 1,
+                       1, 0.5,
+                       1, 0.25,
+                       1, 0.1), byrow = TRUE, ncol = 2)
+theta <- numeric(0)
+shape <- numeric(0)
+rate <- numeric(0)
+parameter_set <- character(0)
+for (i in 1:nrow(parameters)) {
+  result <- simulate(n_sample = 250, shape = parameters[i, 1], rate = parameters[i, 2], 
+                     theta = 0.1, n_rep = 1, prior = "lognormal")
+  result_dat <- result$theta_bayes
+  n_in_sample <- nrow(result_dat)
+  theta <- c(theta, result_dat$theta)
+  shape <- c(shape, rep(parameters[i, 1], n_in_sample))
+  rate <- c(rate, rep(parameters[i, 1], n_in_sample))
+  tmp <- sprintf("mean_log = %3.1f, sd_log = %3.1f", parameters[i, 1], parameters[i, 2])
+  parameter_set <- c(parameter_set, rep(tmp, n_in_sample))
+}
+fit_dat <- tibble(theta = theta,
+                  shape = shape,
+                  rate = rate,
+                  parameter_set = parameter_set)
+
+theta <- numeric(0)
+density <- numeric(0)
+parameter_set <- character(0)
+x <- seq(0, 2, 0.01)
+for (i in 1:nrow(parameters)) {
+  y <- dlnorm(x, meanlog = parameters[i, 1], sdlog = parameters[i, 2])
+  theta <- c(theta, x)
+  density <- c(density, y)
+  tmp <- sprintf("mean_log = %3.1f, sd_log = %3.1f", parameters[i, 1], parameters[i, 2])
+  parameter_set <- c(parameter_set, rep(tmp, length(x)))
+}
+dens_dat <- tibble(theta = theta,
+                   density = density,
+                   parameter_set = parameter_set)
+
+## Plot posterior vs. prior
+##
+title <- paste("Sample size: 250, Prior density shown as dashed red line. ",
+               bquote(theta), 
+               "= 0.1.")
+p <- ggplot(fit_dat, aes(x = theta)) +
+  geom_density() +
+  geom_line(data = dens_dat, aes(x = theta, y = density), color = "salmon", linetype = "dashed") +
+  xlab(bquote(theta)) +
+  ylab("") +
+  facet_wrap(~ parameter_set, scales = "free_y") +
+  ggtitle(title) +
+  theme_bw()
+p
+```
+
+# Simulations for MSE and bias
+
+## Gamma(1, 1) prior
+
+```{r}
+n_repetitions <- 100
+theta <- 0.1
+shape <- 1
+rate <- 1
+
+result <- simulate(n_sample = 250, shape = shape, rate = shape, theta = theta, n_rep = n_repetitions)
+dat <- tibble(theta_watterson = result$theta_watterson,
+              theta_bayes = result$theta_bayes,
+              theta_lo = result$theta_lo,
+              theta_hi = result$theta_hi)
+dat_sum <- dat %>%
+  select(theta_watterson, theta_bayes) %>%
+  summarize(theta_w = mean(theta_watterson),
+            theta_w_sd = sd(theta_watterson),
+            theta_b = mean(theta_bayes),
+            theta_b_sd = sd(theta_bayes))
+cover <- 0
+for (i in 1:nrow(dat)) {
+  if ((dat$theta_lo[i] < theta) && (dat$theta_hi[i] > theta)) {
+    cover <- cover + 1
+  }
+}
+theta_w_bias <- mean(dat$theta_watterson - theta)
+theta_w_rmse <- sqrt(sum(dat$theta_watterson - theta)^2)
+theta_b_bias <- mean(dat$theta_bayes - theta)
+theta_b_rmse <- sqrt(sum(dat$theta_bayes - theta)^2)
+dat_sum$theta_w_bias <- theta_w_bias
+dat_sum$theta_w_rmse <- theta_w_rmse
+dat_sum$theta_b_bias <- theta_b_bias
+dat_sum$theta_b_rmse <- theta_b_rmse
+dat_sum$theta_b_cover <- cover/n_repetitions
+dat_sum
+
+theta_df <- tibble(theta_watterson = theta, theta_bayes = theta)
+p <- ggplot(dat, aes(x = theta_watterson, y = theta_bayes)) +
+  geom_point() +
+  geom_point(data = theta_df, size = 4, color = "royalblue") +
+  geom_abline(slope = 1, intercept = 0, color = "salmon", linetype = "dashed") +
+  xlim(0, NA) +
+  ylim(0, NA) +
+  ggtitle("Watterson vs. Bayesian estimates") +
+  theme_bw()
+p
+
+dat <- dat %>% 
+  select(theta_watterson, theta_bayes) %>% 
+  pivot_longer(cols = everything(), names_to = "Model", values_to = "theta") %>%
+  mutate(Model = substring(Model, 7))
+p <-ggplot(dat, aes(x = theta)) +
+  geom_histogram(binwidth = 0.05) +
+  geom_vline(xintercept = theta, color = "salmon", linetype = "dashed") +
+  facet_wrap(~ Model) +
+  theme_bw()
+p
+```
+
+## Lognormal(1, 1) prior
+
+
+```{r}
+n_repetitions <- 100
+theta <- 0.1
+shape <- 1
+rate <- 1
+
+result <- simulate(n_sample = 250, shape = shape, rate = shape, theta = theta, n_rep = 
+                   n_repetitions, prior = "lognormal")
+dat <- tibble(theta_watterson = result$theta_watterson,
+              theta_bayes = result$theta_bayes,
+              theta_lo = result$theta_lo,
+              theta_hi = result$theta_hi)
+dat_sum <- dat %>%
+  select(theta_watterson, theta_bayes) %>%
+  summarize(theta_w = mean(theta_watterson),
+            theta_w_sd = sd(theta_watterson),
+            theta_b = mean(theta_bayes),
+            theta_b_sd = sd(theta_bayes))
+cover <- 0
+for (i in 1:nrow(dat)) {
+  if ((dat$theta_lo[i] < theta) && (dat$theta_hi[i] > theta)) {
+    cover <- cover + 1
+  }
+}
+theta_w_bias <- mean(dat$theta_watterson - theta)
+theta_w_rmse <- sqrt(sum(dat$theta_watterson - theta)^2)
+theta_b_bias <- mean(dat$theta_bayes - theta)
+theta_b_rmse <- sqrt(sum(dat$theta_bayes - theta)^2)
+dat_sum$theta_w_bias <- theta_w_bias
+dat_sum$theta_w_rmse <- theta_w_rmse
+dat_sum$theta_b_bias <- theta_b_bias
+dat_sum$theta_b_rmse <- theta_b_rmse
+dat_sum$theta_b_cover <- cover/n_repetitions
+dat_sum
+
+theta_df <- tibble(theta_watterson = theta, theta_bayes = theta)
+p <- ggplot(dat, aes(x = theta_watterson, y = theta_bayes)) +
+  geom_point() +
+  geom_point(data = theta_df, size = 4, color = "royalblue") +
+  geom_abline(slope = 1, intercept = 0, color = "salmon", linetype = "dashed") +
+  xlim(0, NA) +
+  ylim(0, NA) +
+  ggtitle("Watterson vs. Bayesian estimates") +
+  theme_bw()
+p
+
+dat <- dat %>% 
+  select(theta_watterson, theta_bayes) %>% 
+  pivot_longer(cols = everything(), names_to = "Model", values_to = "theta") %>%
+  mutate(Model = substring(Model, 7))
+p <-ggplot(dat, aes(x = theta)) +
+  geom_histogram(binwidth = 0.05) +
+  geom_vline(xintercept = theta, color = "salmon", linetype = "dashed") +
+  facet_wrap(~ Model) +
   theme_bw()
 p
 ```

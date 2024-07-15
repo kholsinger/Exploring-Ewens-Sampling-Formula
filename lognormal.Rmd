@@ -1,0 +1,39 @@
+---
+title: "lognormal distribution"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+
+x <- seq(0, 5, by = 0.01)
+y <- dlnorm(x, meanlog = 0, sdlog = 1)
+dat <- tibble(x = x, 
+              y = y)
+p <- ggplot(dat, aes(x = x, y = y)) +
+  geom_line() +
+  theme_bw()
+p
+
+p <- ggplot(dat, aes(x = log(x), y = y)) +
+  geom_line() +
+  theme_bw()
+p
+
+z <- rlnorm(10000, meanlog = 0, sdlog = 1)
+dat <- tibble(x = z)
+p <- ggplot(dat, aes(x = x)) +
+  geom_density() +
+  theme_bw()
+p
+
+p <- ggplot(dat, aes(x = log(x))) +
+  geom_density() +
+  theme_bw()
+p
+
+
+```
+
