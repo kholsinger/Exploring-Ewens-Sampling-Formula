@@ -1,0 +1,118 @@
+---
+title: "Theta-K vs. Theta-Pi"
+output: html_notebook
+---
+
+
+## Load libraries and clear out memory
+
+```{r}
+library(phyclust)
+library(tidyverse)
+library(ggplot2)
+
+rm(list = ls())
+```
+
+## Utility functions
+
+
+```{r}
+## calculate a harmonic sum: \sum_i 1/i
+##
+harm_sum <- function(n) {
+  k <- 0
+  for (i in 1:(n-1)) {
+    k <- k + 1/i
+  }
+  return(k)
+}
+
+## Watterson's estimate of theta
+##
+est_theta_k <- function(seg_sites, n_sample, seq_len) {
+  return(length(seg_sites)/(harm_sum(n_sample)*seq_len))
+}
+
+## nucleotide diversity estimate of theta
+##
+est_theta_pi <- function(dna_seqs) {
+  n_seqs <- dim(dna_seqs)[1]
+  seq_length <- dim(dna_seqs)[2]
+  pi <- 0.0 
+  for (i in 1:(n_seqs - 1)) {
+    for (j in (i+1):n_seqs) {
+      pi <- pi + length(seg.sites(dna_seqs[c(i, j), ]))/seq_length
+    }
+  }
+  pi <- pi/(n_seqs*(n_seqs - 1)/2)
+  return(pi)
+}
+
+## Run the simulation
+##
+simulate <- function(n_sample, seq_len, theta, n_rep = 1) {
+  theta_k<- numeric(n_rep)
+  theta_pi <- numeric(n_rep)
+  for (rep in 1:n_rep) {
+    if (n_rep > 1) {
+      cat(".")
+      if (rep %% 5 == 0) {
+        count <- sprintf("%4d", rep)
+        cat(count)
+      }
+      if (rep %% 50 == 0) {
+        cat("\n")
+      }
+    }
+    ## simulate the data
+    ##
+    ms_tree <- phyclust::ms(nsam = n_sample, nreps = 1, opts = paste("-T"))
+    ## N.B.: seqs_chr comes back in PHYLIP format as a vector of strings (including the taxon)
+    ## 
+    options <- paste("-mGTR -l", seq_len, " -d", theta, " -q", sep = "")
+    seqs_chr <- seqgen(opts = options, newick.tree = ms_tree[3])
+    ## We write the result to disk
+    ##
+    write(seqs_chr, "seqs.phy")
+    ## read it back using read.dna (from ape) and delete it
+    ##
+    tmp <- read.dna("seqs.phy")
+    file.remove("seqs.phy")
+    ## estimate theta using Watterson approach (theta_k)
+    ##
+    seg_sites <- seg.sites(tmp)
+    theta_k[rep] <- est_theta_k(seg_sites, n_sample, seq_len)
+    ## estimate theta using nucleotide diversity (theta_pi)
+    ##
+    theta_pi[rep] <- est_theta_pi(tmp)
+  }
+  ret_val <- tibble(theta_k = theta_k, theta_pi = theta_pi)
+  return(ret_val)
+}
+```
+
+## Run the simulation
+
+```{r message = FALSE}
+results <- simulate(n_sample = 25, seq_len = 1000, theta = 0.1, n_rep = 10000)
+
+for_plot <- pivot_longer(results, cols = everything())
+p <- ggplot(for_plot, aes(x = value, color = name, fill = name)) +
+  geom_density(alpha = 0.2) +
+  theme_bw()
+p
+```
+
+
+```{r message = FALSE}
+results <- simulate(n_sample = 25, seq_len = 10000, theta = 0.1, n_rep = 10000)
+
+for_plot <- pivot_longer(results, cols = everything())
+p <- ggplot(for_plot, aes(x = value, color = name, fill = name)) +
+  geom_density(alpha = 0.2) +
+  theme_bw()
+p
+```
+
+

@@ -32,8 +32,23 @@ harm_sum <- function(n) {
 
 ## Watterson's estimate of theta
 ##
-est_theta <- function(seg_sites, n_sample) {
-  return(seg_sites/harm_sum(n_sample))
+est_theta_k <- function(seg_sites, n_sample) {
+  return(length(seg_sites)/harm_sum(n_sample))
+}
+
+## nucleotide diversity estimate of theta
+##
+est_theta_pi <- function(dna_seqs) {
+  n_seqs <- dim(dna_seqs)[1]
+  seq_length <- dim(dna_seqs)[2]
+  pi <- 0.0 
+  for (i in 1:(n_seqs - 1)) {
+    for (j in (i+1):n_seqs) {
+      pi <- pi + length(seg.sites(dna_seqs[c(i, j), ]))/seq_length
+    }
+  }
+  pi <- pi/(n_seqs*(n_seqs - 1)/2)
+  return(pi)
 }
 
 ## get mean and 95% credible intervals from Stan fit
@@ -48,8 +63,9 @@ get_fit_stats <- function(fit) {
 
 ## Run the simulation
 ##
-simulate <- function(n_sample, shape, rate, theta, n_rep = 1, model = "ewens") {
-  theta_watterson <- numeric(n_rep)
+simulate <- function(n_sample, shape, rate, theta, n_rep = 1) {
+  theta_k<- numeric(n_rep)
+  theta_pi <- numeric(n_rep)
   if (n_rep == 1) {
     theta_bayes <- tibble(rep = 0, theta = 0, lp__ = 0)[0, ]
   } else {
@@ -71,23 +87,36 @@ simulate <- function(n_sample, shape, rate, theta, n_rep = 1, model = "ewens") {
     ## simulate the data
     ##
     ms_tree <- phyclust::ms(nsam = n_sample, nreps = 1, opts = paste("-T"))
-    
     ## N.B.: seqs_chr comes back in PHYLIP format as a vector of strings (including the taxon)
-    ## name getting it to a matrix of sequences isn't easy
+    ## 
+    seqs_chr <- seqgen(opts = "-mGTR -l1000 -s0.01", rooted.tree = read.tree(text = ms_tree))
+    ## We write the result to disk
     ##
-    seqs_chr <- seqgen(opts = "-mGTR -l25 -s0.1", rooted.tree = read.tree(text = ms_tree))
-    
-    
-    
-    ## estimate theta using Watterson approach
+    write(seqs_chr, "seqs.phy")
+    ## read it back using read.dna (from ape) and delete it
     ##
-    seg_sites <- seg.sites(seqs_dna)
-    theta_watterson[rep] <- est_theta(seg_sites, n_sample)
+    tmp <- read.dna("seqs.phy")
+    file.remove("seqs.phy")
+    ## estimate theta using Watterson approach (theta_k)
+    ##
+    seg_sites <- seg.sites(tmp)
+    theta_k[rep] <- est_theta_k(seg_sites, n_sample)
+    ## estimate theta using nucleotide diversity (theta_pi)
+    ##
+    theta_pi[rep] <- est_theta_pi(tmp)
     ## estimate theta using Bayesian approach
     ##
     a <- numeric(n_sample)
-    if (seg_sites > 0) {
-      counts <- table(ms_tree[5:(n_sample+4)])
+    if (length(seg_sites) > 0) {
+      ## convert DNAbin to string for each sample
+      ##
+      tmp_chr <- character(nrow(tmp))
+      for (i in 1:nrow(tmp)) {
+        tmp_chr[i] <- paste(as.character(tmp[i, ]), collapse = "")
+      }
+      ## get counts for each haplotype
+      ##
+      counts <- table(tmp_chr)
       for (count in 1:length(counts)) {
         index <- counts[count]
         a[index] <- a[index] + 1
@@ -95,18 +124,13 @@ simulate <- function(n_sample, shape, rate, theta, n_rep = 1, model = "ewens") {
     } else {
       a[n_sample] <- 1
     }
-    if (model == "ewens") {
-      stan_data <- list(N = n_sample,
-                        a = a,
-                        shape = shape,
-                        rate = rate) 
-    } else {
-      stan_data <- list(N = n_sample,
-                        s = seg_sites,
-                        shape = shape,
-                        rate = rate)
-    }
-    fit <- stan(file = model,
+    print(a)
+    stan_data <- list(N = n_sample,
+                      a = a,
+                      shape = shape,
+                      rate = rate,
+                      prior = 0) 
+    fit <- stan(file = "ewens.stan",
                 data = stan_data,
                 refresh = 0)
     if (n_rep == 1) {
@@ -119,11 +143,20 @@ simulate <- function(n_sample, shape, rate, theta, n_rep = 1, model = "ewens") {
     }
   }
   if (n_rep == 1) {
-    return(list(theta_watterson = theta_watterson, theta_bayes = theta_bayes))
+    return(list(theta_k = theta_k,
+                theta_pi = theta_pi,
+                theta_bayes = theta_bayes, 
+                dna_seq = tmp))
   } else {
-    return(list(theta_watterson = theta_watterson, theta_bayes = theta_bayes,
-                theta_lo = theta_lo, theta_hi = theta_hi))
+    return(list(theta_k = theta_k, 
+                theta_pi = theta_pi,
+                theta_bayes = theta_bayes,
+                theta_lo = theta_lo, 
+                theta_hi = theta_hi))
   }
 }
 ```
 
+```{r}
+fit <- simulate(25, 1, 1, 0.1)
+```
