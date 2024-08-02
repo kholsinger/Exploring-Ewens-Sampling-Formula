@@ -57,21 +57,27 @@ est_theta_pi <- function(dna_seqs) {
 
 ## construct matrix of allele counts, loci in rows
 ##
-construct_a <- function(dna_seqs) {
-  n_seqs <- nrow(dna_seqs)
-  dna_seqs_chr <- character(n_seqs)
-  for (i in 1:n_seqs) {
-    dna_seqs_chr[i] <- paste(dna_seqs[1, ], collapse = "")
+construct_a <- function(dna_seqs, n_sample) {
+  a <- numeric(n_sample)
+  if (length(seg.sites(dna_seqs)) > 0 ) {
+    n_seqs <- nrow(dna_seqs)
+    dna_seqs_chr <- character(n_seqs)
+    for (i in 1:n_seqs) {
+      dna_seqs_chr[i] <- paste(dna_seqs[i, ], collapse = "")
+    }
+    ##
+    ## need to figure out how to construct table of haplotype counts from table of 
+    ## sequences
+    ##
+    counts <- table(as.factor(dna_seqs_chr))
+    for (count in 1:n_sample) {
+      index <- counts[count]
+      a[index] <- a[index] + 1
+    }
+  } else {
+    a[ncol(dna_seqs)] <- 1
   }
-  ##
-  ## need to figure out how to construct table of haplotype counts from table of 
-  ## sequences
-  ##
-  print()
-  allele_table <- table(dna_seqs_chr)
-  print(seg.sites(dna_seqs))
-  print(allele_table)
-  stop()
+  return(a)
 }
 
 ## Run the simulation
@@ -97,7 +103,7 @@ simulate <- function(n_sample, seq_len, n_loci, theta, n_rep = 1,
     ##
     theta_kl <- numeric(n_loci)
     theta_pil <- numeric(n_loci)
-    a <- matrix(nrow = n_loci, ncol = n_loci)
+    a <- matrix(nrow = n_loci, ncol = n_sample)
     for (l in 1:n_loci) {
       ms_tree <- phyclust::ms(nsam = n_sample, nreps = 1, opts = paste("-T"))
       ## N.B.: seqs_chr comes back in PHYLIP format as a vector of strings (including the taxon)
@@ -121,9 +127,8 @@ simulate <- function(n_sample, seq_len, n_loci, theta, n_rep = 1,
       ##
       theta_pil[l] <- est_theta_pi(tmp)
       ## construct a matrix for Bayesian estimate
-      a <- construct_a(tmp)
+      a[l, ] <- construct_a(tmp, n_sample)
     }
-    print(a)
     theta_k[rep] <- mean(theta_kl)
     theta_pi[rep] <- mean(theta_pil)
     ## Bayesian estimate: single theta shared across all loci
@@ -134,10 +139,10 @@ simulate <- function(n_sample, seq_len, n_loci, theta, n_rep = 1,
                       shape = shape,
                       rate = rate) 
     fit <- stan(file = "ewens-multilocus.stan",
-                data = stan_data)#,
-                #refresh = 0)
+                data = stan_data,
+                refresh = 0)
     fit_df <- as.data.frame(fit)
-    theta_B[rep] <- mean(fit_df$theta, na.rm = TRUE)
+    theta_B[rep] <- mean(fit_df$theta, na.rm = TRUE)/seq_len
   }
   ret_val <- tibble(theta_k = theta_k,
                     theta_pi = theta_pi,
@@ -153,5 +158,41 @@ results <- simulate(n_sample = 25,
                     seq_len = 1000,
                     n_loci = 100,
                     theta = 0.1,
-                    n_rep = 1)
+                    n_rep = 25)
+
+for_plot <- pivot_longer(results, cols = everything(), names_to = "Model")
+p <- ggplot(for_plot, aes(x = value, fill = Model, color = Model)) +
+  geom_density(alpha = 0.2) +
+  theme_bw()
+p
 ```
+
+```{r}
+results <- simulate(n_sample = 25,
+                    seq_len = 1000,
+                    n_loci = 100,
+                    theta = 1.0,
+                    n_rep = 25)
+
+for_plot <- pivot_longer(results, cols = everything(), names_to = "Model")
+p <- ggplot(for_plot, aes(x = value, fill = Model, color = Model)) +
+  geom_density(alpha = 0.2) +
+  theme_bw()
+p
+```
+
+
+```{r}
+results <- simulate(n_sample = 250,
+                    seq_len = 1000,
+                    n_loci = 100,
+                    theta = 1.0,
+                    n_rep = 25)
+
+for_plot <- pivot_longer(results, cols = everything(), names_to = "Model")
+p <- ggplot(for_plot, aes(x = value, fill = Model, color = Model)) +
+  geom_density(alpha = 0.2) +
+  theme_bw()
+p
+```
+
