@@ -1,5 +1,5 @@
 ---
-title: "Multilocus estimates of pi"
+title: "Multilocus estimates of pi (finite sequence length)"
 output: html_notebook
 ---
 
@@ -80,9 +80,9 @@ construct_a <- function(dna_seqs, n_sample) {
   return(a)
 }
 
-## Run the simulation
+## Run the simulation for a finite length sequence
 ##
-simulate <- function(n_sample, seq_len, n_loci, theta, n_rep = 1,
+simulate_finite <- function(n_sample, seq_len, n_loci, theta, n_rep = 1,
                      shape = 1, rate = 1) 
 {
   theta_k<- numeric(n_rep)
@@ -154,11 +154,11 @@ simulate <- function(n_sample, seq_len, n_loci, theta, n_rep = 1,
 ## Run a simulation
 
 ```{r}
-results <- simulate(n_sample = 25,
-                    seq_len = 1000,
-                    n_loci = 100,
-                    theta = 0.1,
-                    n_rep = 25)
+results <- simulate_finite(n_sample = 25,
+                           seq_len = 1000,
+                           n_loci = 100,
+                           theta = 0.1,
+                           n_rep = 25)
 
 for_plot <- pivot_longer(results, cols = everything(), names_to = "Model")
 p <- ggplot(for_plot, aes(x = value, fill = Model, color = Model)) +
@@ -168,11 +168,11 @@ p
 ```
 
 ```{r}
-results <- simulate(n_sample = 25,
-                    seq_len = 1000,
-                    n_loci = 100,
-                    theta = 1.0,
-                    n_rep = 25)
+results <- simulate_finite(n_sample = 25,
+                           seq_len = 1000,
+                           n_loci = 100,
+                           theta = 1.0,
+                           n_rep = 25)
 
 for_plot <- pivot_longer(results, cols = everything(), names_to = "Model")
 p <- ggplot(for_plot, aes(x = value, fill = Model, color = Model)) +
@@ -183,11 +183,11 @@ p
 
 
 ```{r}
-results <- simulate(n_sample = 250,
-                    seq_len = 1000,
-                    n_loci = 100,
-                    theta = 1.0,
-                    n_rep = 25)
+results <- simulate_finite(n_sample = 250,
+                           seq_len = 1000,
+                           n_loci = 100,
+                           theta = 1.0,
+                           n_rep = 25)
 
 for_plot <- pivot_longer(results, cols = everything(), names_to = "Model")
 p <- ggplot(for_plot, aes(x = value, fill = Model, color = Model)) +
