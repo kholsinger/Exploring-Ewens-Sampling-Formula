@@ -1,9 +1,0 @@
-## TO-DO
-
-1. Add variance of Watterson estimator. Use +/- 2sd for intervals.
-2. Write simple R package
-3. Use package to run simulations for
-   NB: Think about the right set of thetas
-   a. theta = 0.01, 0.05, 0.1, 0.5, 0.9, 1.0
-   b. n_sample = 25, 50, 100, 250, 1000
-
