@@ -109,4 +109,68 @@ p <- ggplot(for_plot, aes(x = value, fill = Model, color = Model)) +
 p
 ```
 
-Using SNPs with this approach is clearly a bad idea, unless maybe you simulate short sequences and place mutations with seqgen.
+Using SNPs with this approach is clearly a bad idea, unless maybe you simulate short sequences and place mutations with seqgen. Let's see how many segregating sites in simulations.
+
+```{r}
+n_sample <- 25
+seq_len <- 250
+theta <- 0.0001
+
+seg_sites <- numeric(100)
+for (i in 1:100) {
+      ms_tree <- phyclust::ms(nsam = n_sample, nreps = 1, opts = paste("-T"))
+      ## N.B.: seqs_chr comes back in PHYLIP format as a vector of strings (including the taxon)
+      ## HKY without -t (transitiion/transversion ratio) and without -f (frequencies) makes the
+      ## model Jukes-Cantor
+      ##
+      options <- paste("-mHKY -l", seq_len, " -d", theta, " -q", sep = "")
+      seqs_chr <- seqgen(opts = options, newick.tree = ms_tree[3])
+      ## We write the result to disk
+      ##
+      write(seqs_chr, "seqs.phy")
+      ## read it back using read.dna (from ape) and delete it
+      ##
+      tmp <- read.dna("seqs.phy")
+      file.remove("seqs.phy")
+      seg_sites[i] <- length(seg.sites(tmp))
+}
+
+for_plot <- tibble(seg_sites = seg_sites)
+p <- ggplot(for_plot, aes(x = seg_sites)) +
+  geom_histogram() +
+  theme_bw()
+p
+```
+
+You can get it down to a small number of segregating sites, but how much information will you have? This is just made up biallelic SNP data.
+
+```{r}
+    n_sample <- 25
+    n_loci <- 100
+    shape <- 1
+    rate <- 1
+    
+    a <- matrix(data = rep(0, n_loci*n_sample), nrow = n_loci, ncol = n_sample)
+    for (i in 1:n_loci) {
+      n <- rbinom(1, 25, 0.2)
+      a[i, n] <- 1
+      a[i, 25 - n] <- 1
+    }    
+    
+    stan_data <- list(N = n_sample,
+                      L = n_loci,
+                      a = a,
+                      shape = shape,
+                      rate = rate) 
+    fit <- stan(file = "ewens-multilocus.stan",
+                data = stan_data,
+                refresh = 0)
+    fit_df <- as.data.frame(fit)
+    
+    p <- ggplot(fit_df, aes(x = theta)) +
+      geom_density() +
+      theme_bw()
+    p
+```
+
+There seems to be a reasonable amount of information there. Maybe this is worth pursuing. Now the question is whether there's a more efficient way to generate SNP samples.
