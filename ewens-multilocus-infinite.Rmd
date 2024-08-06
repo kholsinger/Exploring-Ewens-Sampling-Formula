@@ -58,8 +58,8 @@ construct_a <- function(ms_tree, n_sample, seg_sites) {
 
 ## Run the simulation for a finite length sequence
 ##
-simulate_infinite <- function(n_sample, n_loci, theta, n_rep = 1,
-                     shape = 1, rate = 1) 
+simulate_infinite <- function(n_sample, n_loci, theta, 
+                              n_rep = 1, shape = 1, rate = 1) 
 {
   theta_k<- numeric(n_rep)
   theta_B <- numeric(n_rep)
