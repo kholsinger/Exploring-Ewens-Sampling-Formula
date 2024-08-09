@@ -1,0 +1,73 @@
+functions {
+  int i_sum(int[] a) {
+    int sum = 0;
+    int n = dims(a)[1];
+    
+    for (i in 1:n) {
+      sum += i*a[i];
+    }
+    return sum;
+  }
+
+  ## ESF conditional on polymorphism
+  ##
+  real ewens_conditional_lpmf(int[] a, real theta) {
+    real x;
+    real theta_prod;
+    real denom;
+    int n = i_sum(a);
+
+    ## first the unconditional ESF
+    ##
+    x = lgamma(n + 1) - log(theta);
+    for (i in 1:(n-1)) {
+      x -= log(theta + i);
+    }
+    ## save the first part for use in calculating the denominator
+    ##
+    theta_prod = x;
+
+    ## now the rest of the unconditional ESF
+    ##
+    for (j in 1:n) {
+      x += a[j]*log(theta) - a[j]*log(j) - lgamma(a[j] + 1);
+    }
+    
+    ## get the log probability of a polymorphic sample
+    ## 1 - ESF for a monomorphic sample
+    ##
+    denom = theta_prod + log(theta) - log(n);
+    denom = log(1.0 - exp(denom));
+    ## now divide the unconditional ESF by the denominator
+    ## and return
+    ##
+    return x - denom;
+  }
+}
+
+data {
+  int<lower=0> N;
+  int<lower=0> L;
+  int a[L, N];
+  real shape;
+  real rate;
+}
+
+parameters {
+  real<lower=0> theta;
+}
+
+model {
+  ## gamma prior on theta
+  ##   mean = shape/rate
+  ##   variance = shape/(rate^2)
+  ##
+  theta ~ gamma(shape, rate); 
+
+  ## likelihood of data
+  ##
+  for (l in 1:L) {
+    target += ewens_conditional_lpmf(a[l] | theta);
+  }
+}
+

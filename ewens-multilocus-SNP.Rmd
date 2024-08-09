@@ -40,7 +40,7 @@ construct_a <- function(ms_tree, n_sample, seg_sites) {
   return(a)
 }
 
-## Run the simulation for a finite length sequence
+## Run the simulation for an infinite sites model
 ##
 simulate_infinite <- function(n_sample, n_loci, theta, 
                               n_rep = 1, shape = 1, rate = 1) 
@@ -174,3 +174,151 @@ You can get it down to a small number of segregating sites, but how much informa
 ```
 
 There seems to be a reasonable amount of information there. Maybe this is worth pursuing. Now the question is whether there's a more efficient way to generate SNP samples.
+
+## ESF conditional on polymorphism
+
+I'm going to put off efficicent SNP generation for a while. I want to investigate how large the difference is between estimates of $\theta$ based on the full ESF and those conditional on polymorphism. SNPs are a conditional sample, and estimates made without taking that into account are likely to be biased.
+
+```{r}
+construct_a_finite <- function(dna_seqs, n_sample) {
+  a <- numeric(n_sample)
+  if (length(seg.sites(dna_seqs)) > 0 ) {
+    n_seqs <- nrow(dna_seqs)
+    dna_seqs_chr <- character(n_seqs)
+    for (i in 1:n_seqs) {
+      dna_seqs_chr[i] <- paste(dna_seqs[i, ], collapse = "")
+    }
+    ##
+    ## need to figure out how to construct table of haplotype counts from table of 
+    ## sequences
+    ##
+    counts <- table(as.factor(dna_seqs_chr))
+    for (count in 1:n_sample) {
+      index <- counts[count]
+      a[index] <- a[index] + 1
+    }
+  } else {
+    a[n_sample] <- 1
+  }
+  return(a)
+}
+
+## Run the simulation for a finite length sequence
+##
+simulate_finite <- function(n_sample, seq_len, n_loci, theta,  
+                            n_rep = 1, shape = 1, rate = 1, conditional = FALSE) 
+{
+  theta_B <- numeric(n_rep)
+  for (rep in 1:n_rep) {
+    if (n_rep > 1) {
+      cat(".")
+      if (rep %% 5 == 0) {
+        count <- sprintf("%4d", rep)
+        cat(count)
+      }
+      if (rep %% 50 == 0) {
+        cat("\n")
+      }
+    }
+    ## simulate the data
+    ##
+    a <- matrix(nrow = n_loci, ncol = n_sample)
+    for (l in 1:n_loci) {
+      seg_sites <- 0
+      ## if conditional == TRUE, keep constructing samples until we have a SNP
+      ## Note: as written there could be more than two alleles at the SNP
+      ##
+      while ((seg_sites < 1)) {
+        ms_tree <- phyclust::ms(nsam = n_sample, nreps = 1, opts = paste("-T"))
+        ## N.B.: seqs_chr comes back in PHYLIP format as a vector of strings (including the taxon)
+        ## HKY without -t (transitiion/transversion ratio) and without -f (frequencies) makes the
+        ## model Jukes-Cantor
+        ##
+        options <- paste("-mHKY -l", seq_len, " -d", theta, " -q", sep = "")
+        seqs_chr <- seqgen(opts = options, newick.tree = ms_tree[3])
+        ## We write the result to disk
+        ##
+        write(seqs_chr, "seqs.phy")
+        ## read it back using read.dna (from ape) and delete it
+        ##
+        tmp <- read.dna("seqs.phy")
+        file.remove("seqs.phy")
+        ## estimate theta using Watterson approach (theta_k)
+        ##
+        seg_sites <- length(seg.sites(tmp))
+        if (conditional == FALSE) {
+          break;
+        }
+      }
+      ## construct a matrix for Bayesian estimate
+      ##
+      a[l, ] <- construct_a_finite(tmp, n_sample)
+    }
+    ## Bayesian estimate: single theta shared across all loci
+    ##
+    stan_data <- list(N = n_sample,
+                      L = n_loci,
+                      a = a,
+                      shape = shape,
+                      rate = rate) 
+    ## Note: In the first simulation where I defined conditional == TRUE, I commented
+    ## out the lines that would call the conditional Stan code.
+    ##
+    if (conditional) {
+      model <- "ewens-multilocus-conditional.stan"
+    } else {
+      model <- "ewens-multilocus.stan"
+    }
+    fit <- stan(file = model,
+                data = stan_data,
+                refresh = 0)
+    fit_df <- as.data.frame(fit)
+    theta_B[rep] <- mean(fit_df$theta, na.rm = TRUE)/seq_len
+  }
+  ret_val <- tibble(theta_B = theta_B)
+  return(ret_val)
+}
+```
+
+Suppressing warnings because there are a small number of divergent transitions after warmup when theta is very small.
+
+```{r warning = FALSE}
+results <- simulate_finite(n_sample = 25, seq_len = 250, n_loci = 100, theta = 0.0001, n_rep = 100,
+                           shape = 1, rate = 1, conditional = FALSE)
+
+p <- ggplot(results, aes(x = theta_B)) +
+  geom_density() +
+  geom_vline(xintercept = 0.0001, color = "salmon", linetype = "dashed") +
+  theme_bw() +
+  theme(axis.text.y = element_blank())
+p
+```
+That was allowing for cases without polymorphism. Now we'll try it restricting it to cases where there is polymorphism.
+
+```{r warning = FALSE}
+results <- simulate_finite(n_sample = 25, seq_len = 250, n_loci = 100, theta = 0.0001, n_rep = 100,
+                           shape = 1, rate = 1, conditional = TRUE)
+
+p <- ggplot(results, aes(x = theta_B)) +
+  geom_density() +
+  geom_vline(xintercept = 0.0001, color = "salmon", linetype = "dashed") +
+  theme_bw() +
+  theme(axis.text.y = element_blank())
+p
+```
+
+Clearly estimates based on SNPs that don't take into account ascertainment bias won't work well. This isn't surprising, but I'm glad that I checked. Note: the conditional stan model was commented out for that simulation. I've removed the comment for the simulation below.
+
+```{r}
+results <- simulate_finite(n_sample = 25, seq_len = 250, n_loci = 100, theta = 0.0001, n_rep = 100,
+                           shape = 1, rate = 1, conditional = TRUE)
+
+p <- ggplot(results, aes(x = theta_B)) +
+  geom_density() +
+  geom_vline(xintercept = 0.0001, color = "salmon", linetype = "dashed") +
+  theme_bw() +
+  theme(axis.text.y = element_blank())
+p
+```
+
+There appears to be more uncertainty in the estimate than when sampling unconditionally, but it appears that conditioning works.
