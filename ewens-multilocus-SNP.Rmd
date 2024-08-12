@@ -205,8 +205,12 @@ construct_a_finite <- function(dna_seqs, n_sample) {
 
 ## Run the simulation for a finite length sequence
 ##
+## Note: ts_tv = 0.5 gives equal rates since there are 4 types of transversions and only 
+## 2 types of transitions
+##
 simulate_finite <- function(n_sample, seq_len, n_loci, theta,  
-                            n_rep = 1, shape = 1, rate = 1, conditional = FALSE) 
+                            n_rep = 1, shape = 1, rate = 1, conditional = FALSE,
+                            ts_tv = 0.5) 
 {
   theta_B <- numeric(n_rep)
   for (rep in 1:n_rep) {
@@ -231,10 +235,9 @@ simulate_finite <- function(n_sample, seq_len, n_loci, theta,
       while ((seg_sites < 1)) {
         ms_tree <- phyclust::ms(nsam = n_sample, nreps = 1, opts = paste("-T"))
         ## N.B.: seqs_chr comes back in PHYLIP format as a vector of strings (including the taxon)
-        ## HKY without -t (transitiion/transversion ratio) and without -f (frequencies) makes the
-        ## model Jukes-Cantor
+        ## HKY with -t0.5 and without -f (frequencies) makes the model Jukes-Cantor
         ##
-        options <- paste("-mHKY -l", seq_len, " -d", theta, " -q", sep = "")
+        options <- paste("-mHKY -l", seq_len, " -d", theta, " -t", ts_tv, " -q", sep = "")
         seqs_chr <- seqgen(opts = options, newick.tree = ms_tree[3])
         ## We write the result to disk
         ##
@@ -321,4 +324,53 @@ p <- ggplot(results, aes(x = theta_B)) +
 p
 ```
 
-There appears to be more uncertainty in the estimate than when sampling unconditionally, but it appears that conditioning works.
+There appears to be more uncertainty in the estimate than when sampling unconditionally, but it appears that conditioning works. Let's see how simulating sequences with the HKY model and a transition/transversion ratio of 3:1 affects the results.
+
+
+```{r}
+results <- simulate_finite(n_sample = 25, seq_len = 250, n_loci = 100, theta = 0.0001, n_rep = 100,
+                           shape = 1, rate = 1, conditional = TRUE, ts_tv = 3)
+
+p <- ggplot(results, aes(x = theta_B)) +
+  geom_density() +
+  geom_vline(xintercept = 0.0001, color = "salmon", linetype = "dashed") +
+  theme_bw() +
+  theme(axis.text.y = element_blank())
+p
+```
+
+It doesn't make much difference.
+
+It occurs to me that I've been specifying a gamma prior on $\theta$ with a shape and a rate (inverse scale) of 1. That leads to a prior mean of 1 and a prior variance of 1, which doesn't make a lot of sense, since in this model $\theta$ is $4N_e\mu$, where $\mu$ is the mutation rate per nucleotide site. Given that we expect $\mu \approx 10^{-8}$ a more reasonable (and still generous) prior mean for $\theta$ would be $10^{-2}$, corresponding to $N_e = 250,000$. If we leave the shape at 1 we need to make the scale $10^{-2}$ meaning that the rate should be 100. Let's give that a shot and see what we get. But first, I want to make sure I'm translating rate and scale correctly.
+
+```{r}
+scale_01 <- rgamma(10000, 1, scale = 0.01)
+rate_100 <- rgamma(10000, 1, rate = 100)
+for_plot <- tibble(x = c(scale_01, rate_100),
+                   method = c(rep("Scale = 0.01", 10000), rep("Rate = 100", 10000)))
+p <- ggplot(for_plot, aes(x = x, color = method, fill = method)) +
+  geom_density(alpha = 0.2) +
+  theme_bw()
+p
+
+for_plot_sum <- for_plot %>%
+  group_by(method) %>%
+  summarize(xbar = mean(x))
+for_plot_sum
+```
+Looks good. The densities are indistinguishable, and the mean of each is very close to 0.01.
+
+
+```{r}
+results <- simulate_finite(n_sample = 25, seq_len = 250, n_loci = 100, theta = 0.0001, n_rep = 100,
+                           shape = 1, rate = 100, conditional = TRUE, ts_tv = 3)
+
+p <- ggplot(results, aes(x = theta_B)) +
+  geom_density() +
+  geom_vline(xintercept = 0.0001, color = "salmon", linetype = "dashed") +
+  theme_bw() +
+  theme(axis.text.y = element_blank())
+p
+```
+
+Even with 100 loci, the choice of prior makes a difference.

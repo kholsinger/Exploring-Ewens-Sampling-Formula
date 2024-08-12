@@ -1,0 +1,108 @@
+---
+title: "Beta Binomial approach for SNPs"
+output: html_notebook
+---
+
+The stationary distribution of allele frequencies within a population given effective size $N_e$, mutation rate $\mu$ from $A_1$ to $A_2$, and mutation rate $\nu$ from $A_2$ to $A_1$ is
+
+$$
+\begin{align*}
+P(p) &= \frac{1}{B(4N_e\nu - 1, 4N_e\mu - 1)}p^{4N_e\nu - 1}(1 - p)^{4N_e\mu - 1} \\
+     &= \frac{1}{B(\phi - 1, \theta - 1)}p^{\phi - 1}(1 - p)^{\theta - 1}
+\end{align*}
+$$
+where $\phi = \theta\frac{\nu}{\mu}$.
+
+Consider a sample of SNPs from $L$ loci with $n_l$ the number of "1" alleles at locus $l$ in a sample of $N_l$ alleles.
+
+$$
+P(n_l | \phi, \theta) = \mbox{BetaBinomial}(n_l | N_l, \phi, \theta)
+$$
+
+With $L$ loci we have $L+1$ parameters to estimate, even if we assume $N_e$ is constant across loci. That means the likelihood is non-identifiable, and any estimate using this approach will be very sensitive to the choice of priors. If, however, we assume $\nu$ and $\mu$ are constant across loci, then we have only two parameters to estimate. Let's see how well that works, if at all.
+
+```{r}
+construct_n <- function(dna_seqs, n_sample) {
+  n <- numeric(n_sample)
+  if (length(seg.sites(dna_seqs)) > 0 ) {
+    n_seqs <- nrow(dna_seqs)
+    dna_seqs_chr <- character(n_seqs)
+    for (i in 1:n_seqs) {
+      dna_seqs_chr[i] <- paste(dna_seqs[i, ], collapse = "")
+    }
+    counts <- table(as.factor(dna_seqs_chr))
+    for (count in 1:n_sample) {
+      index <- counts[count]
+      n[index] <- a[index] + 1
+    }
+  } else {
+    n[n_sample] <- 1
+  }
+  return(which(n == 1)[1])
+}
+
+## Run the simulation for a finite length sequence
+##
+## Note: ts_tv = 0.5 gives equal rates since there are 4 types of transversions and only 
+## 2 types of transitions
+##
+simulate_finite <- function(n_sample, seq_len, n_loci, theta,  
+                            n_rep = 1, ts_tv = 0.5) 
+{
+  theta_B <- numeric(n_rep)
+  for (rep in 1:n_rep) {
+    if (n_rep > 1) {
+      cat(".")
+      if (rep %% 5 == 0) {
+        count <- sprintf("%4d", rep)
+        cat(count)
+      }
+      if (rep %% 50 == 0) {
+        cat("\n")
+      }
+    }
+    ## simulate the data
+    ##
+    n <- numeric(n_loci)
+    for (l in 1:n_loci) {
+      seg_sites <- 0
+      ## if conditional == TRUE, keep constructing samples until we have a SNP
+      ## Note: as written there could be more than two alleles at the SNP
+      ##
+      while ((seg_sites != 1)) {
+        ms_tree <- phyclust::ms(nsam = n_sample, nreps = 1, opts = paste("-T"))
+        ## N.B.: seqs_chr comes back in PHYLIP format as a vector of strings (including the taxon)
+        ## HKY with -t0.5 and without -f (frequencies) makes the model Jukes-Cantor
+        ##
+        options <- paste("-mHKY -l", seq_len, " -d", theta, " -t", ts_tv, " -q", sep = "")
+        seqs_chr <- seqgen(opts = options, newick.tree = ms_tree[3])
+        ## We write the result to disk
+        ##
+        write(seqs_chr, "seqs.phy")
+        ## read it back using read.dna (from ape) and delete it
+        ##
+        tmp <- read.dna("seqs.phy")
+        file.remove("seqs.phy")
+        ## estimate theta using Watterson approach (theta_k)
+        ##
+        seg_sites <- length(seg.sites(tmp))
+      }
+      n[l] <- construct_n(tmp, n_sample)
+    }
+    ## Bayesian estimate: single theta shared across all loci
+    ##
+    stan_data <- list(N = n_sample,
+                      L = n_loci,
+                      n = n) 
+    model <- "beta-binomial-SNP.stan"
+    fit <- stan(file = model,
+                data = stan_data,
+                refresh = (n_rep == 1))
+    fit_df <- as.data.frame(fit)
+    theta_B[rep] <- mean(fit_df$theta, na.rm = TRUE)/seq_len
+  }
+  ret_val <- tibble(theta_B = theta_B)
+  return(ret_val)
+}
+```
+
