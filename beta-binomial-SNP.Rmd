@@ -3,6 +3,20 @@ title: "Beta Binomial approach for SNPs"
 output: html_notebook
 ---
 
+## Load libraries and clear out memory
+
+```{r}
+library(phyclust)
+library(rstan)
+library(tidyverse)
+library(ggplot2)
+
+rm(list = ls())
+
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
+```
+
 The stationary distribution of allele frequencies within a population given effective size $N_e$, mutation rate $\mu$ from $A_1$ to $A_2$, and mutation rate $\nu$ from $A_2$ to $A_1$ is
 
 $$
@@ -33,7 +47,7 @@ construct_n <- function(dna_seqs, n_sample) {
     counts <- table(as.factor(dna_seqs_chr))
     for (count in 1:n_sample) {
       index <- counts[count]
-      n[index] <- a[index] + 1
+      n[index] <- n[index] + 1
     }
   } else {
     n[n_sample] <- 1
@@ -47,8 +61,9 @@ construct_n <- function(dna_seqs, n_sample) {
 ## 2 types of transitions
 ##
 simulate_finite <- function(n_sample, seq_len, n_loci, theta,  
-                            n_rep = 1, ts_tv = 0.5) 
+                            shape = 1, rate = 1, n_rep = 1, ts_tv = 0.5, equal_pars = FALSE) 
 {
+  phi_B <- numeric(n_rep)
   theta_B <- numeric(n_rep)
   for (rep in 1:n_rep) {
     if (n_rep > 1) {
@@ -83,7 +98,7 @@ simulate_finite <- function(n_sample, seq_len, n_loci, theta,
         ##
         tmp <- read.dna("seqs.phy")
         file.remove("seqs.phy")
-        ## estimate theta using Watterson approach (theta_k)
+        ## check the number of segregating sites
         ##
         seg_sites <- length(seg.sites(tmp))
       }
@@ -93,16 +108,52 @@ simulate_finite <- function(n_sample, seq_len, n_loci, theta,
     ##
     stan_data <- list(N = n_sample,
                       L = n_loci,
-                      n = n) 
+                      n = n,
+                      equal_pars = (equal_pars == TRUE)) 
     model <- "beta-binomial-SNP.stan"
     fit <- stan(file = model,
                 data = stan_data,
                 refresh = (n_rep == 1))
     fit_df <- as.data.frame(fit)
-    theta_B[rep] <- mean(fit_df$theta, na.rm = TRUE)/seq_len
+    phi_B[rep] <- mean(fit_df$phi, na.rm = TRUE)
+    theta_B[rep] <- mean(fit_df$theta, na.rm = TRUE)
   }
-  ret_val <- tibble(theta_B = theta_B)
+  ret_val <- tibble(phi_B = phi_B,
+                    theta_B = theta_B)
   return(ret_val)
 }
+```
+
+```{r}
+results <- simulate_finite(n_sample = 25, seq_len = 250, n_loci = 100, theta = 0.0001, n_rep = 10,
+                           shape = 1, rate = 100, equal_pars = FALSE)
+
+summary(results)
+
+for_plot <- results %>%
+  pivot_longer(everything())
+p <- ggplot(for_plot, aes(x = value, color = name, fill = name)) +
+  geom_density(alpha = 0.2) +
+  geom_vline(xintercept = 0.0001, color = "salmon", linetype = "dashed") +
+  theme_bw() +
+  theme(axis.text.y = element_blank())
+p
+```
+
+
+```{r}
+results <- simulate_finite(n_sample = 25, seq_len = 250, n_loci = 100, theta = 0.0001, n_rep = 10,
+                           shape = 1, rate = 100, equal_pars = TRUE)
+
+summary(results)
+
+for_plot <- results %>%
+  pivot_longer(everything())
+p <- ggplot(for_plot, aes(x = value, color = name, fill = name)) +
+  geom_density(alpha = 0.2) +
+  geom_vline(xintercept = 0.0001, color = "salmon", linetype = "dashed") +
+  theme_bw() +
+  theme(axis.text.y = element_blank())
+p
 ```
 

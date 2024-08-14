@@ -374,3 +374,124 @@ p
 ```
 
 Even with 100 loci, the choice of prior makes a difference.
+
+## Exactly one segregating site
+
+In the simulations above I simply made sure there was a segregating site. For the ones that follow, I'm going to have exactly one segregating site.
+
+```{r}
+construct_a_finite <- function(dna_seqs, n_sample) {
+  a <- numeric(n_sample)
+  if (length(seg.sites(dna_seqs)) > 0 ) {
+    n_seqs <- nrow(dna_seqs)
+    dna_seqs_chr <- character(n_seqs)
+    for (i in 1:n_seqs) {
+      dna_seqs_chr[i] <- paste(dna_seqs[i, ], collapse = "")
+    }
+    ##
+    ## need to figure out how to construct table of haplotype counts from table of 
+    ## sequences
+    ##
+    counts <- table(as.factor(dna_seqs_chr))
+    for (count in 1:n_sample) {
+      index <- counts[count]
+      a[index] <- a[index] + 1
+    }
+  } else {
+    a[n_sample] <- 1
+  }
+  return(a)
+}
+
+## Run the simulation for a finite length sequence
+##
+## Note: ts_tv = 0.5 gives equal rates since there are 4 types of transversions and only 
+## 2 types of transitions
+##
+simulate_finite <- function(n_sample, seq_len, n_loci, theta,  
+                            n_rep = 1, shape = 1, rate = 1, conditional = FALSE,
+                            ts_tv = 0.5) 
+{
+  theta_B <- numeric(n_rep)
+  for (rep in 1:n_rep) {
+    if (n_rep > 1) {
+      cat(".")
+      if (rep %% 5 == 0) {
+        count <- sprintf("%4d", rep)
+        cat(count)
+      }
+      if (rep %% 50 == 0) {
+        cat("\n")
+      }
+    }
+    ## simulate the data
+    ##
+    a <- matrix(nrow = n_loci, ncol = n_sample)
+    for (l in 1:n_loci) {
+      seg_sites <- 0
+      ## if conditional == TRUE, keep constructing samples until we have a SNP
+      ##
+      while ((seg_sites != 1)) {
+        ms_tree <- phyclust::ms(nsam = n_sample, nreps = 1, opts = paste("-T"))
+        ## N.B.: seqs_chr comes back in PHYLIP format as a vector of strings (including the taxon)
+        ## HKY with -t0.5 and without -f (frequencies) makes the model Jukes-Cantor
+        ##
+        options <- paste("-mHKY -l", seq_len, " -d", theta, " -t", ts_tv, " -q", sep = "")
+        seqs_chr <- seqgen(opts = options, newick.tree = ms_tree[3])
+        ## We write the result to disk
+        ##
+        write(seqs_chr, "seqs.phy")
+        ## read it back using read.dna (from ape) and delete it
+        ##
+        tmp <- read.dna("seqs.phy")
+        file.remove("seqs.phy")
+        ## estimate theta using Watterson approach (theta_k)
+        ##
+        seg_sites <- length(seg.sites(tmp))
+        if (conditional == FALSE) {
+          break;
+        }
+      }
+      ## construct a matrix for Bayesian estimate
+      ##
+      a[l, ] <- construct_a_finite(tmp, n_sample)
+    }
+    ## Bayesian estimate: single theta shared across all loci
+    ##
+    stan_data <- list(N = n_sample,
+                      L = n_loci,
+                      a = a,
+                      shape = shape,
+                      rate = rate) 
+    if (conditional) {
+      model <- "ewens-multilocus-conditional.stan"
+    } else {
+      model <- "ewens-multilocus.stan"
+    }
+    fit <- stan(file = model,
+                data = stan_data,
+                refresh = 0)
+    fit_df <- as.data.frame(fit)
+    theta_B[rep] <- mean(fit_df$theta, na.rm = TRUE)/seq_len
+  }
+  ret_val <- tibble(theta_B = theta_B)
+  return(ret_val)
+}
+```
+
+
+```{r warning = FALSE}
+results_1 <- simulate_finite(n_sample = 25, seq_len = 250, n_loci = 100, theta = 0.0001, n_rep = 100,
+                             shape = 1, rate = 1, conditional = TRUE)
+results_100 <- simulate_finite(n_sample = 25, seq_len = 250, n_loci = 100, theta = 0.0001, 
+                               n_rep = 100,
+                               shape = 1, rate = 100, conditional = TRUE)
+for_plot <- tibble(rate = c(rep("Rate = 1", nrow(results_1)), rep("Rate = 100", nrow(results_1))),
+                   theta = c(results_1$theta_B, results_100$theta_B))
+p <- ggplot(for_plot, aes(x = theta, color = rate, fill = rate)) +
+  geom_density(alpha = 0.2) +
+  geom_vline(xintercept = 0.0001, color = "salmon", linetype = "dashed") +
+  theme_bw() +
+  theme(axis.text.y = element_blank())
+p
+```
