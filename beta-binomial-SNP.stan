@@ -10,6 +10,7 @@ data {
 parameters {
   real<lower=0> phi;
   real<lower=0> theta_raw;
+  vector<lower=0, upper=1>[L] p;
 }
 
 transformed parameters {
@@ -33,7 +34,8 @@ model {
   ## likelihood of data
   ##
   for (l in 1:L) {
-    n ~ beta_binomial(N, phi, theta);
+    p[l] ~ beta(phi, theta);
+    n[l] ~ binomial(N,p[l]);
   }
 }
 
